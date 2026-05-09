@@ -115,35 +115,47 @@ Wine warnings about partially-implemented Win32 APIs and are harmless.
 
 ### 6. Enable Wine virtual desktop (Wayland users — strongly recommended)
 
+#### 6a. Enable XWayland native scaling (only if you use GNOME fractional scale)
+
+If your GNOME display scale is set to anything other than 100% (Settings →
+Displays → Scale), enable mutter's XWayland native scaling so Wine can
+render at your panel's full resolution rather than the smaller scaled-down
+canvas XWayland exposes by default. Without this, PCLink's built-in
+layouts (the smallest is 1366×768) will overflow with horizontal scroll
+on any panel where the logical width is below 1366 — which includes
+1920×1200 at 150% scale, 2560×1600 at 200% scale, and similar.
+
 ```bash
-# Find the size XWayland actually exposes:
-xrandr | grep '*'
-# Example output: 1280x800   59.81*+
+gsettings set org.gnome.mutter experimental-features \
+    "['scale-monitor-framebuffer', 'xwayland-native-scaling']"
 ```
 
-Take that resolution and set it as your Wine virtual desktop:
+**You must log out and back in** for this to take effect — the flag is
+read when XWayland starts, not picked up live. After re-login, verify:
+
+```bash
+xrandr | grep '*'
+# Should now report your panel's native resolution, e.g. 1920x1200,
+# regardless of GNOME scale.
+```
+
+If you skip this and stick with default XWayland scaling, fall back to
+"set the virtual desktop to whatever `xrandr` reports" — see the
+troubleshooting section.
+
+#### 6b. Set the Wine virtual desktop to your panel's native resolution
 
 ```bash
 wine reg add 'HKCU\Software\Wine\Explorer' /v Desktop /d Default /f
 wine reg add 'HKCU\Software\Wine\Explorer\Desktops' \
-    /v Default /d 1280x800 /f
+    /v Default /d 1920x1200 /f
 ```
 
-Use **the `xrandr` value, not your physical panel resolution.** With
-GNOME fractional scaling they differ. Examples:
+Replace `1920x1200` with whatever `xrandr | grep '*'` reports after the
+log-out/log-back-in.
 
-| Panel | GNOME scale | What `xrandr` reports / what to use |
-|---|---|---|
-| 1920×1200 | 100% | 1920×1200 |
-| 1920×1200 | 150% | 1280×800 |
-| 2560×1600 | 200% | 1280×800 |
-| 3840×2400 | 200% | 1920×1200 |
-
-If you change GNOME's display scale later, re-run the second `reg add`
-with the new value and restart Wine (`pkill -f wineserver`).
-
-X11 users can skip this step (Wine windows place correctly under most X11
-window managers), though virtual desktop still tends to be more
+X11 users can skip this whole step (Wine windows place correctly under
+most X11 window managers), though virtual desktop still tends to be more
 predictable.
 
 ### 7. Install PCLink
@@ -247,6 +259,21 @@ shell.
 **Comms drop or look corrupted on connect.** `ModemManager` may be
 probing the cable. Add the udev rule from "stable cable name" above
 (the `ID_MM_DEVICE_IGNORE=1` part is what matters).
+
+**PCLink shows horizontal/vertical scrollbars even on the smallest built-in
+layout.** PCLink's smallest layout is 1366×768; if your Wine virtual
+desktop is smaller than that in either dimension the layout overflows.
+This happens when GNOME fractional scaling is on and XWayland native
+scaling is off — XWayland exposes a scaled-down resolution (e.g.
+1280×800) and Wine renders into that. Two fixes:
+
+1. **Recommended:** enable XWayland native scaling per step 6a, log
+   out / back in, then set the virtual desktop to your panel's native
+   resolution (step 6b).
+2. **Quick fallback:** drop GNOME's display scale to 100% in
+   Settings → Displays. XWayland will then expose the panel's full
+   resolution by default. Update the virtual desktop registry value to
+   match `xrandr | grep '*'`.
 
 **Wine warnings about Vulkan (`Failed to load libvulkan.so.1`).**
 Harmless. PCLink doesn't use Vulkan. Wine probes for it during startup
