@@ -7,10 +7,10 @@ ECU) over the FTDI-based Link tuning cable.
 
 This guide assumes you'd rather keep your laptop on Linux than dual-boot or
 run a full Windows VM just for tuning sessions. With the steps below
-PCLink runs natively-feeling under Wine, the FTDI cable is mapped through
-to a Wine COM port, and the UI is at least as responsive as on Windows
-(the live-data graphs use OpenGL, which Mesa often renders faster than
-Intel's Windows GL drivers).
+PCLink runs natively-feeling under Wine, talks to the ECU's built-in
+FT232H over USB through a native-D2XX bridge, and the UI is at least as
+responsive as on Windows (the live-data graphs use OpenGL, which Mesa
+often renders faster than Intel's Windows GL drivers).
 
 > Status: confirmed working with PCLink G5 7.8.2 under Wine 11.0–11.8 on
 > Ubuntu 24.04 (GNOME on Wayland). Should work on any modern Wine release;
@@ -39,8 +39,8 @@ Three non-obvious things break this setup if missed. Each is explained
 inline below, but as a summary so you know what's coming:
 
 1. **Ubuntu's `brltty` daemon hijacks all FTDI devices** via udev. If
-   you don't remove it, the cable physically shows up in `lsusb` but
-   `/dev/ttyUSB0` never appears.
+   you don't remove it, it grabs the ECU's FT232H — the device shows in
+   `lsusb` but PCLink (and the D2XX bridge) can't open it.
 2. **GNOME on Wayland silently ignores external window-positioning
    calls.** Wine's normal per-window placement can drop application
    windows off-screen with no way to drag them back. The fix is to run
@@ -84,8 +84,8 @@ sudo apt purge -y brltty
 
 `brltty` is the Linux braille-display daemon; on Ubuntu it ships with a
 udev rule that grabs every FTDI device assuming it might be a braille
-display. With `brltty` installed, the kernel's `ftdi_sio` driver never
-gets to claim the cable and `/dev/ttyUSB0` never appears.
+display. With `brltty` installed, it claims the ECU's FT232H before
+anything else can, so neither the D2XX bridge nor PCLink can open it.
 
 `brltty` can sometimes come back as a recommended dependency of
 accessibility metapackages — if your cable stops appearing later, check
@@ -197,23 +197,18 @@ wizard — click through it as you would on Windows. Default install path
 is `C:\Link G5\PCLink G5\`. The installer will also create a desktop
 launcher and an apps-menu entry automatically; both work after step 9.
 
-### 8. Plug in the cable and map it to Wine COM1
+### 8. Plug in and confirm the ECU
+
+Power the ECU and connect the USB cable, then confirm Linux sees the
+in-ECU FT232H:
 
 ```bash
-# Confirm the cable appears (should be /dev/ttyUSB0 if it's the only
-# USB-serial device plugged in):
-ls /dev/ttyUSB*
-dmesg | tail -5 | grep -i ftdi
-
-# Map it as Wine's COM1:
-rm -f ~/.wine/dosdevices/com1
-ln -s /dev/ttyUSB0 ~/.wine/dosdevices/com1
+lsusb | grep 0403:7069   # "Link ECU" — only appears when the ECU is powered
 ```
 
-Wine pre-creates symlinks for `com1`–`com32` pointing at `/dev/ttyS0`–
-`ttyS31` (real hardware serial ports). Replacing `com1` with a link to
-`/dev/ttyUSB0` is the simplest mapping. If your machine has actual
-hardware serial ports you need to keep, use a higher COM number instead.
+There's **no COM-port symlink to set up** — PCLink reaches this ECU over
+USB through the [D2XX bridge](#connecting-over-the-in-ecu-usb-port-d2xx-bridge)
+(set up next), not a serial COM port.
 
 ### 9. Trust the desktop launcher (GNOME only)
 
@@ -228,21 +223,20 @@ gio set ~/Desktop/PCLink\ G5.desktop metadata::trusted true
 After this it appears as a launcher with the PCLink icon. The same entry
 also appears in the GNOME apps grid (Super → search "PCLink").
 
-### 10. Launch PCLink
+### 10. Launch PCLink and connect
 
-Either double-click the desktop icon, run from the apps menu, or:
+Set up the [D2XX bridge](#connecting-over-the-in-ecu-usb-port-d2xx-bridge)
+first — that's what makes the USB connection work under Wine, and it
+patches the desktop/menu launchers to start PCLink through the shim. Then
+double-click the desktop icon, run it from the apps menu, or from a
+terminal pass the same two variables:
 
 ```bash
-wine ~/.wine/drive_c/Link\ G5/PCLink\ G5/PCLink.exe
+WINEDLLOVERRIDES="ftd2xx=b" FTDID=0403:7069 \
+    wine ~/.wine/drive_c/Link\ G5/PCLink\ G5/PCLink.exe
 ```
 
-In PCLink: **Options → Connection → COM1**, set the baud rate per Link's
-documentation (G4X auto-negotiates), then **Connect**.
-
-> If PCLink returns `LINK_NOT_RESPONDING` and your ECU tunes over a
-> built-in USB port (`lsusb` shows `0403:7069`, "Link ECU"), the COM-port
-> path can't reach it — skip to [Connecting over the in-ECU USB port (D2XX
-> bridge)](#connecting-over-the-in-ecu-usb-port-d2xx-bridge).
+In PCLink: **Options → Connection → USB**, then **Connect**.
 
 Maximize the Wine container window with **Super+↑** to fill the screen.
 
@@ -372,52 +366,29 @@ but `FTDID` must still come from the launch environment.
 > wipes it**. If PCLink stops connecting after updating Wine, rerun
 > `sudo make install ARCH=i386` in the `wineftd2xx` directory.
 
-## Recommended: stable cable name with udev
-
-If you have other USB-serial devices that might be plugged in, the cable
-isn't always `/dev/ttyUSB0` — first-plugged-wins. Pinning it by FTDI
-serial number gives you a stable `/dev/link-ecu`:
-
-```bash
-# Plug in the cable, then:
-udevadm info -a -n /dev/ttyUSB0 | grep '{serial}' | head -1
-```
-
-Take the serial value and write `/etc/udev/rules.d/99-link-ecu.rules`:
-
-```
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{serial}=="REPLACE_ME", \
-    SYMLINK+="link-ecu", ENV{ID_MM_DEVICE_IGNORE}="1"
-```
-
-The `ID_MM_DEVICE_IGNORE=1` tells `ModemManager` to leave the cable
-alone — without it, ModemManager occasionally probes serial devices on
-plug-in by sending AT commands, which can confuse the ECU during the
-PCLink handshake.
-
-Reload udev and re-point Wine at the stable name:
-
-```bash
-sudo udevadm control --reload && sudo udevadm trigger
-ln -sf /dev/link-ecu ~/.wine/dosdevices/com1
-```
-
 ## Troubleshooting
 
 **Installer GUI doesn't appear, just shows in the dock.** You skipped
 step 6 — Wine put the window off-screen and Wayland won't let you move
 it. `pkill -f wineserver` to clean up, do step 6, retry the installer.
 
-**`/dev/ttyUSB0` doesn't appear when cable is plugged in.** `brltty`
-got reinstalled. `dpkg -l brltty 2>/dev/null && sudo apt purge -y brltty`.
+**The ECU doesn't show in `lsusb` (`0403:7069`).** Make sure the ECU is
+**powered** — the in-ECU FT232H only enumerates when it's on. If it's
+powered and still missing, `brltty` may have grabbed it:
+`dpkg -l brltty 2>/dev/null && sudo apt purge -y brltty`.
 
-**Permission denied opening COM port.** `groups` doesn't include
-`dialout` — log out and back in, or `newgrp dialout` for the current
-shell.
+**`LINK_NOT_RESPONDING` on connect.** PCLink isn't reaching the ECU
+through the D2XX bridge. Check, in order: the shim is loaded (launch with
+`WINEDEBUG=+loaddll` and look for `ftd2xx ... builtin`); `ftdi_sio` isn't
+holding the device (`ls /dev/ttyUSB*` should be empty for `0403:7069`);
+your user has libusb access (the `MODE="0666"` udev rule). After a Wine
+upgrade, rebuild the shim (`sudo make install ARCH=i386`).
 
-**Comms drop or look corrupted on connect.** `ModemManager` may be
-probing the cable. Add the udev rule from "stable cable name" above
-(the `ID_MM_DEVICE_IGNORE=1` part is what matters).
+**PCLink can't open the device / `FT_Open` fails.** Either `ftdi_sio`
+claimed the FT232H — `ls /dev/ttyUSB*` showing a device confirms it;
+unbind it (`echo -n <intf> | sudo tee /sys/bus/usb/drivers/ftdi_sio/unbind`)
+— or your user lacks libusb access (the `MODE="0666"` rule from the D2XX
+bridge section).
 
 **PCLink shows horizontal/vertical scrollbars even on the smallest built-in
 layout.** PCLink's smallest layout is 1366×768; if your Wine virtual
@@ -458,14 +429,6 @@ old wineserver state.
   already accelerated by Wine + Mesa.
 - **No `.NET`, no Visual C++ runtimes.** PCLink ships everything it
   needs.
-- **FTDI D2XX userspace driver — only for the in-ECU USB cable.** With a
-  cable that presents a normal serial port, PCLink uses Win32 serial APIs,
-  which Wine routes through your COM symlink → `/dev/ttyUSB0` → kernel
-  `ftdi_sio`; you don't need FTDI's D2XX library and shouldn't install it.
-  The exception is an ECU that tunes over its built-in USB port
-  (`0403:7069`): that uses PCLink's USB mode, which *requires* D2XX — see
-  [Connecting over the in-ECU USB port](#connecting-over-the-in-ecu-usb-port-d2xx-bridge),
-  where a native `libftd2xx` is exactly what makes it work under Wine.
 - **No need for a separate Wine prefix.** PCLink is well-behaved and
   doesn't conflict with other Wine apps. If you do install other apps
   later, consider using a separate prefix (`WINEPREFIX=~/.wine-other
