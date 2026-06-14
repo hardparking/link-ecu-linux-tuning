@@ -12,9 +12,14 @@ to a Wine COM port, and the UI is at least as responsive as on Windows
 (the live-data graphs use OpenGL, which Mesa often renders faster than
 Intel's Windows GL drivers).
 
-> Status: confirmed working with PCLink G5 7.8.2 under Wine 11.0 on
+> Status: confirmed working with PCLink G5 7.8.2 under Wine 11.0–11.8 on
 > Ubuntu 24.04 (GNOME on Wayland). Should work on any modern Wine release;
 > earlier or later PCLink versions likely work too but are untested.
+>
+> Which connection path you need depends on your cable — see [Connecting
+> over the in-ECU USB port (D2XX bridge)](#connecting-over-the-in-ecu-usb-port-d2xx-bridge)
+> if your ECU tunes over its own built-in USB port (`lsusb` shows
+> `0403:7069`, "Link ECU") rather than through an external serial cable.
 
 ## What you need
 
@@ -45,6 +50,64 @@ inline below, but as a summary so you know what's coming:
 3. **The Wine virtual desktop must match the *logical* screen size
    XWayland exposes**, not the physical panel resolution. With GNOME
    fractional scaling these differ — see step 6.
+
+## The tuning cable and ECU connection
+
+There are two parts to the physical link: the **cable type** (which
+depends on your ECU model) and the **ECU-side connector** it plugs into.
+Both cable families present to Linux as an FTDI USB-serial device, so the
+kernel binds them the same way. **How PCLink reaches the ECU, though,
+depends on the model.** Most cables work through the plain
+`/dev/ttyUSB0` → Wine COM-port mapping in the setup steps. But some ECUs
+(e.g. the G4X plug-ins) tune over a USB port built into the ECU, where
+the FT232H lives *inside the ECU* and enumerates as `0403:7069`
+("Link ECU") — those do **not** work through the COM mapping and need the
+[D2XX bridge](#connecting-over-the-in-ecu-usb-port-d2xx-bridge) below.
+
+### Which cable
+
+- **CUSB — "CAN to USB" tuning cable.** The standard cable, shipped with
+  most G4X/G4+ ECUs. ECU side is a 6-pin CAN connector; computer side is
+  USB-A. Covers the wire-in Storm, Xtreme, Fury, Thunder, the Force, and
+  all G4+/G4X plug-in (factory-fit) ECUs.
+- **Micro-USB cable.** The Atom/AtomX and Monsoon/MonsoonX have an
+  onboard Micro-USB tuning port instead and use a plain Micro-USB → USB-A
+  cable — *not* the CUSB. Everything downstream (FTDI, COM mapping) is
+  identical.
+
+Despite the "CAN to USB" name, the CUSB is **not** a generic CAN
+adapter: it contains an FTDI USB-serial bridge, so the host OS sees a
+standard FTDI device (`ftdi_sio`, `/dev/ttyUSB0`) exactly as the setup
+steps assume. The CAN side is just the ECU-facing electrical interface —
+not what Linux talks to. (This is also why step 1's `brltty` purge
+matters: the cable is an FTDI device like any other.)
+
+### ECU-side connector (CUSB / wire-in)
+
+Wire-in ECUs break tuning out to a 6-pin CAN connector — a sealed
+**Deutsch DTM-style** connector on wire-in looms, or a JST-style plug on
+plug-in ECUs — carrying **CAN1** on the models above. The four populated
+pins:
+
+| Pin | Signal |
+|-----|--------|
+| 1   | 12V    |
+| 2   | Ground |
+| 3   | CAN L  |
+| 4   | CAN H  |
+
+The 12V/ground pins power the cable's electronics; CAN H/L (a twisted
+pair) carry the data. On a complete factory loom this connector is
+already populated — you just plug the CUSB in. If you're building or
+extending a harness, **confirm the connector and CAN1 pin assignment
+against Link's wiring manual for your exact model** before crimping: the
+connector style and which CAN port carries tuning vary across the range.
+A CAN bus is multi-drop, so the tuning cable can share CAN1 with a dash
+or other CAN device — but the bus still needs correct 120 Ω termination
+at both physical ends.
+
+Once connected, continue with the setup steps below — the cable
+enumerates as `/dev/ttyUSB0` and maps to Wine's COM1 (step 8).
 
 ## Setup
 
@@ -211,7 +274,153 @@ wine ~/.wine/drive_c/Link\ G5/PCLink\ G5/PCLink.exe
 In PCLink: **Options → Connection → COM1**, set the baud rate per Link's
 documentation (G4X auto-negotiates), then **Connect**.
 
+> If PCLink returns `LINK_NOT_RESPONDING` and your ECU tunes over a
+> built-in USB port (`lsusb` shows `0403:7069`, "Link ECU"), the COM-port
+> path can't reach it — skip to [Connecting over the in-ECU USB port (D2XX
+> bridge)](#connecting-over-the-in-ecu-usb-port-d2xx-bridge).
+
 Maximize the Wine container window with **Super+↑** to fill the screen.
+
+## Connecting over the in-ECU USB port (D2XX bridge)
+
+Some Link ECUs (e.g. the G4X plug-ins) don't tune through an external
+FTDI cable at all — the **FT232H is inside the ECU** and you connect a
+plain USB lead to the ECU's own USB port. It enumerates as a custom FTDI
+device, `0403:7069` ("Link ECU"), and **neither default path reaches it
+under Wine**:
+
+- **Plain serial (COM port).** `ftdi_sio` binds and PCLink's bytes go out
+  the chip, but the ECU never replies — its USB tuning channel isn't the
+  chip's UART, so the COM mapping is a dead end for this model.
+- **PCLink's USB mode (D2XX).** PCLink talks to the chip with FTDI's
+  direct-USB driver (`ftd2xx.dll`). Under Wine that routes through
+  `wineusb`/`ntoskrnl`, which can't complete D2XX's bulk transfers — you
+  get `LINK_NOT_RESPONDING`, and the Wine log shows
+  `wineusb: Unhandled flags 0x3` / `IoBuildPartialMdl`.
+
+The fix is a **native D2XX bridge**: replace PCLink's bundled Windows
+`ftd2xx.dll` with a Winelib `ftd2xx.dll.so` shim that forwards every
+`FT_*` call to FTDI's **native Linux `libftd2xx`** → libusb → the device,
+bypassing Wine's USB stack entirely. PCLink then behaves exactly as it
+does on Windows; the USB I/O just happens Linux-side.
+
+> Confirmed working: PCLink G5 7.8.2 tuning a G4X plug-in over USB under
+> Wine 11.8 on Ubuntu 24.04, launched from the GNOME desktop icon.
+
+### 1. Build tools and Wine headers
+
+```bash
+sudo dpkg --add-architecture i386     # PCLink and the shim are 32-bit
+sudo apt update
+sudo apt install -y gcc-multilib       # 32-bit C toolchain
+```
+
+`winegcc`/`winebuild` ship with WineHQ, but the **Windows dev headers**
+they need (`windef.h` …) do not. Pull them out of Ubuntu's `libwine-dev`
+*without* installing it (installing would drag in a conflicting distro
+Wine):
+
+```bash
+cd /tmp
+apt-get download libwine-dev
+dpkg-deb -x libwine-dev_*.deb winedev
+sudo mkdir -p /usr/include/wine
+sudo cp -r winedev/usr/include/wine/wine/. /usr/include/wine/
+# winegcc now finds /usr/include/wine/windows/windef.h
+```
+
+### 2. Get FTDI's 32-bit `libftd2xx`
+
+Download **`libftd2xx-linux-x86_32-<ver>.tgz`** from FTDI's
+[D2XX drivers page](https://ftdichip.com/drivers/d2xx-drivers/) — the
+**x86_32** row (the 32-bit build is named `x86_32`, *not* `i386`). FTDI's
+site sits behind a Cloudflare challenge, so scripted `wget`/`curl` get a
+403 — download it in a normal browser.
+
+### 3. Build and install the shim
+
+The bridge is [`brentr/wineftd2xx`](https://github.com/brentr/wineftd2xx),
+a Wine `.dll.so` that wraps FTDI's Linux D2XX library:
+
+```bash
+git clone https://github.com/brentr/wineftd2xx.git
+cd wineftd2xx
+# Its Makefile expects the tarball named '…-i386-…'; FTDI now ships
+# 'x86_32', so bridge the name with a symlink:
+ln -s /path/to/libftd2xx-linux-x86_32-<ver>.tgz libftd2xx-linux-i386-<ver>.tgz
+make ARCH=i386
+sudo make install ARCH=i386   # installs ftd2xx.dll.so into Wine's lib dir
+```
+
+### 4. Free the device for libusb
+
+D2XX needs the raw USB device, so `ftdi_sio` must **not** claim it and
+your user needs libusb access. Write
+`/etc/udev/rules.d/99-link-d2xx.rules`:
+
+```
+# user-space (libusb) access to the in-ECU FT232H
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="7069", MODE="0666"
+# keep ftdi_sio off it (an external RS232 adapter, 0403:6001, is unaffected)
+ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="ftdi_sio", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="7069", \
+  RUN+="/bin/sh -c 'echo -n %k > /sys/bus/usb/drivers/ftdi_sio/unbind'"
+```
+
+```bash
+sudo udevadm control --reload && sudo udevadm trigger
+```
+
+(If you ever registered the PID with `ftdi_sio` via `new_id`, that binding
+persists in the running kernel until reboot — the `unbind` rule above
+handles it, or unbind once by hand:
+`echo -n <intf> | sudo tee /sys/bus/usb/drivers/ftdi_sio/unbind`.)
+
+### 5. Launch PCLink through the shim
+
+Force Wine to load the builtin shim instead of PCLink's bundled PE
+`ftd2xx.dll`, and tell the shim which device to open:
+
+```bash
+WINEDLLOVERRIDES="ftd2xx=b" FTDID=0403:7069 \
+    wine ~/.wine/drive_c/Link\ G5/PCLink\ G5/PCLink.exe
+```
+
+Choose **USB** as the connection in PCLink and connect as normal. (Wine
+will still log harmless `wineusb: Unhandled flags 0x3` lines — ignore
+them; PCLink no longer uses that path.)
+
+To make the **desktop icon and apps-menu entry** work too, add the same
+two variables to their `Exec=` lines (`~/Desktop/PCLink G5.desktop` and
+`~/.local/share/applications/wine/Programs/Link ECU/PCLink G5.desktop`):
+
+```
+Exec=env "WINEPREFIX=…" "WINEDLLOVERRIDES=ftd2xx=b" "FTDID=0403:7069" wine "…PCLink.exe"
+```
+
+Re-trust the desktop one afterwards with
+`gio set ~/Desktop/PCLink\ G5.desktop metadata::trusted true`. As a
+backstop you can also persist the override in the prefix registry
+(`wine reg add 'HKCU\Software\Wine\DllOverrides' /v ftd2xx /d builtin /f`),
+but `FTDID` must still come from the launch environment.
+
+> **Maintenance:** the shim lives in WineHQ's lib dir, so a **Wine upgrade
+> wipes it**. If PCLink stops connecting after updating Wine, rerun
+> `sudo make install ARCH=i386` in the `wineftd2xx` directory.
+
+### Hardware alternative: the CANSER serial cable
+
+If you'd rather not maintain the shim, Link's **CANSER** cable taps the
+ECU's 6-pin **CAN 1/RS232** connector out to a DB9 and you tune through a
+USB-RS232 adapter — a path Wine handles as an ordinary COM port. It's a
+passive 3-wire cable (no level shifter — the ECU drives true ±12V RS232):
+
+| ECU 6-pin connector | DB9 |
+|---|---|
+| Pin 5 — Yellow (RS232 TX) | Pin 2 (RXD) |
+| Pin 6 — Grey (RS232 RX) | Pin 3 (TXD) |
+| Pin 1 — Brown (Ground) | Pin 5 (GND) |
+
+In PCLink: COM1, 115200 baud, Connection Mode Manual.
 
 ## Recommended: stable cable name with udev
 
@@ -299,10 +508,14 @@ old wineserver state.
   already accelerated by Wine + Mesa.
 - **No `.NET`, no Visual C++ runtimes.** PCLink ships everything it
   needs.
-- **No FTDI D2XX userspace driver.** PCLink ships `ftd2xx.dll` in its
-  install dir but uses standard Win32 serial APIs (which Wine routes
-  through your COM symlink → `/dev/ttyUSB0` → kernel `ftdi_sio`). Don't
-  install `libftd2xx`; it would require unloading the kernel driver.
+- **FTDI D2XX userspace driver — only for the in-ECU USB cable.** With a
+  cable that presents a normal serial port, PCLink uses Win32 serial APIs,
+  which Wine routes through your COM symlink → `/dev/ttyUSB0` → kernel
+  `ftdi_sio`; you don't need FTDI's D2XX library and shouldn't install it.
+  The exception is an ECU that tunes over its built-in USB port
+  (`0403:7069`): that uses PCLink's USB mode, which *requires* D2XX — see
+  [Connecting over the in-ECU USB port](#connecting-over-the-in-ecu-usb-port-d2xx-bridge),
+  where a native `libftd2xx` is exactly what makes it work under Wine.
 - **No need for a separate Wine prefix.** PCLink is well-behaved and
   doesn't conflict with other Wine apps. If you do install other apps
   later, consider using a separate prefix (`WINEPREFIX=~/.wine-other
