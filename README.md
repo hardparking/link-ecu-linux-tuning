@@ -53,61 +53,26 @@ inline below, but as a summary so you know what's coming:
 
 ## The tuning cable and ECU connection
 
-There are two parts to the physical link: the **cable type** (which
-depends on your ECU model) and the **ECU-side connector** it plugs into.
-Both cable families present to Linux as an FTDI USB-serial device, so the
-kernel binds them the same way. **How PCLink reaches the ECU, though,
-depends on the model.** Most cables work through the plain
-`/dev/ttyUSB0` → Wine COM-port mapping in the setup steps. But some ECUs
-(e.g. the G4X plug-ins) tune over a USB port built into the ECU, where
-the FT232H lives *inside the ECU* and enumerates as `0403:7069`
-("Link ECU") — those do **not** work through the COM mapping and need the
-[D2XX bridge](#connecting-over-the-in-ecu-usb-port-d2xx-bridge) below.
+This guide tunes over the ECU's **USB interface**: a USB lead from the
+laptop to the ECU, with PCLink talking to an FTDI **FT232H that lives
+inside the ECU**. On Linux it enumerates as `0403:7069` ("Link ECU").
 
-### Which cable
+- **G4X plug-in (and other USB-port ECUs).** A plain USB lead from the
+  laptop to the ECU's tuning port — nothing on the wiring side, the
+  FT232H is inside the ECU.
+- **Atom/AtomX and Monsoon/MonsoonX.** Same idea over their onboard
+  **Micro-USB** tuning port (a plain Micro-USB → USB-A cable).
 
-- **CUSB — "CAN to USB" tuning cable.** The standard cable, shipped with
-  most G4X/G4+ ECUs. ECU side is a 6-pin CAN connector; computer side is
-  USB-A. Covers the wire-in Storm, Xtreme, Fury, Thunder, the Force, and
-  all G4+/G4X plug-in (factory-fit) ECUs.
-- **Micro-USB cable.** The Atom/AtomX and Monsoon/MonsoonX have an
-  onboard Micro-USB tuning port instead and use a plain Micro-USB → USB-A
-  cable — *not* the CUSB. Everything downstream (FTDI, COM mapping) is
-  identical.
+Linux sees a single FTDI USB device either way — which is why step 1's
+`brltty` purge matters (it's an FTDI device like any other). The catch:
+this in-ECU FT232H does **not** work through the `/dev/ttyUSB0` →
+COM-port mapping; PCLink reaches it through the
+[D2XX bridge](#connecting-over-the-in-ecu-usb-port-d2xx-bridge) instead.
 
-Despite the "CAN to USB" name, the CUSB is **not** a generic CAN
-adapter: it contains an FTDI USB-serial bridge, so the host OS sees a
-standard FTDI device (`ftdi_sio`, `/dev/ttyUSB0`) exactly as the setup
-steps assume. The CAN side is just the ECU-facing electrical interface —
-not what Linux talks to. (This is also why step 1's `brltty` purge
-matters: the cable is an FTDI device like any other.)
-
-### ECU-side connector (CUSB / wire-in)
-
-Wire-in ECUs break tuning out to a 6-pin CAN connector — a sealed
-**Deutsch DTM-style** connector on wire-in looms, or a JST-style plug on
-plug-in ECUs — carrying **CAN1** on the models above. The four populated
-pins:
-
-| Pin | Signal |
-|-----|--------|
-| 1   | 12V    |
-| 2   | Ground |
-| 3   | CAN L  |
-| 4   | CAN H  |
-
-The 12V/ground pins power the cable's electronics; CAN H/L (a twisted
-pair) carry the data. On a complete factory loom this connector is
-already populated — you just plug the CUSB in. If you're building or
-extending a harness, **confirm the connector and CAN1 pin assignment
-against Link's wiring manual for your exact model** before crimping: the
-connector style and which CAN port carries tuning vary across the range.
-A CAN bus is multi-drop, so the tuning cable can share CAN1 with a dash
-or other CAN device — but the bus still needs correct 120 Ω termination
-at both physical ends.
-
-Once connected, continue with the setup steps below — the cable
-enumerates as `/dev/ttyUSB0` and maps to Wine's COM1 (step 8).
+The ECU must be **powered** before the device will appear — the in-ECU
+FT232H only enumerates when the ECU is on. With it powered and the USB
+cable plugged in, `lsusb` should list `0403:7069`; then continue with the
+setup steps below.
 
 ## Setup
 
@@ -361,7 +326,7 @@ your user needs libusb access. Write
 ```
 # user-space (libusb) access to the in-ECU FT232H
 SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="7069", MODE="0666"
-# keep ftdi_sio off it (an external RS232 adapter, 0403:6001, is unaffected)
+# keep ftdi_sio off it (other FTDI serial devices, e.g. 0403:6001, are unaffected)
 ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="ftdi_sio", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="7069", \
   RUN+="/bin/sh -c 'echo -n %k > /sys/bus/usb/drivers/ftdi_sio/unbind'"
 ```
@@ -406,21 +371,6 @@ but `FTDID` must still come from the launch environment.
 > **Maintenance:** the shim lives in WineHQ's lib dir, so a **Wine upgrade
 > wipes it**. If PCLink stops connecting after updating Wine, rerun
 > `sudo make install ARCH=i386` in the `wineftd2xx` directory.
-
-### Hardware alternative: the CANSER serial cable
-
-If you'd rather not maintain the shim, Link's **CANSER** cable taps the
-ECU's 6-pin **CAN 1/RS232** connector out to a DB9 and you tune through a
-USB-RS232 adapter — a path Wine handles as an ordinary COM port. It's a
-passive 3-wire cable (no level shifter — the ECU drives true ±12V RS232):
-
-| ECU 6-pin connector | DB9 |
-|---|---|
-| Pin 5 — Yellow (RS232 TX) | Pin 2 (RXD) |
-| Pin 6 — Grey (RS232 RX) | Pin 3 (TXD) |
-| Pin 1 — Brown (Ground) | Pin 5 (GND) |
-
-In PCLink: COM1, 115200 baud, Connection Mode Manual.
 
 ## Recommended: stable cable name with udev
 
