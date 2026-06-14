@@ -361,7 +361,7 @@ your user needs libusb access. Write
 ```
 # user-space (libusb) access to the in-ECU FT232H
 SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="7069", MODE="0666"
-# keep ftdi_sio off it (an external RS232 adapter, 0403:6001, is unaffected)
+# keep ftdi_sio off it (other FTDI serial devices, e.g. 0403:6001, are unaffected)
 ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="ftdi_sio", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="7069", \
   RUN+="/bin/sh -c 'echo -n %k > /sys/bus/usb/drivers/ftdi_sio/unbind'"
 ```
@@ -406,21 +406,6 @@ but `FTDID` must still come from the launch environment.
 > **Maintenance:** the shim lives in WineHQ's lib dir, so a **Wine upgrade
 > wipes it**. If PCLink stops connecting after updating Wine, rerun
 > `sudo make install ARCH=i386` in the `wineftd2xx` directory.
-
-### Hardware alternative: the CANSER serial cable
-
-If you'd rather not maintain the shim, Link's **CANSER** cable taps the
-ECU's 6-pin **CAN 1/RS232** connector out to a DB9 and you tune through a
-USB-RS232 adapter — a path Wine handles as an ordinary COM port. It's a
-passive 3-wire cable (no level shifter — the ECU drives true ±12V RS232):
-
-| ECU 6-pin connector | DB9 |
-|---|---|
-| Pin 5 — Yellow (RS232 TX) | Pin 2 (RXD) |
-| Pin 6 — Grey (RS232 RX) | Pin 3 (TXD) |
-| Pin 1 — Brown (Ground) | Pin 5 (GND) |
-
-In PCLink: COM1, 115200 baud, Connection Mode Manual.
 
 ## Recommended: stable cable name with udev
 
