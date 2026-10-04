@@ -1,7 +1,7 @@
 PREFIX_FTDI := $(shell brew --prefix libftdi)
 PREFIX_USB  := $(shell brew --prefix libusb)
 # the CLT linker here can't read the 27 SDK's stubs; build against the running OS's SDK
-SDK := $(lastword $(wildcard $(shell xcode-select -p)/SDKs/MacOSX26*.sdk))
+SDK := $(lastword $(sort $(wildcard $(shell xcode-select -p)/SDKs/MacOSX26*.sdk)))
 
 all: ftd2xx.dll ftdi-bridge
 

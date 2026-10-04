@@ -35,6 +35,7 @@ struct dev_entry {
 
 struct open_dev {
     int in_use;
+    int busy;   /* reads/writes in flight; teardown waits for them */
     uint8_t bus, addr;
     struct ftdi_context *ftdi;
     uint32_t read_ms, write_ms;
@@ -132,13 +133,28 @@ static void enumerate(void)
     libusb_free_device_list(list, 1);
 }
 
-static void close_dev(struct open_dev *o)
+/* Caller holds lock. */
+static void free_dev(struct open_dev *o)
 {
     ftdi_usb_close(o->ftdi);
     ftdi_free(o->ftdi);
     pthread_mutex_destroy(&o->read_lock);
     pthread_mutex_destroy(&o->write_lock);
     memset(o, 0, sizeof(*o));
+}
+
+/* Invalidate the handle now; free the device once in-flight I/O drains.
+ * Caller holds lock. */
+static void close_dev(struct open_dev *o)
+{
+    o->in_use = 0;
+    if (!o->busy) free_dev(o);
+}
+
+/* Caller holds lock. */
+static void release_dev(struct open_dev *o)
+{
+    if (!--o->busy && !o->in_use) free_dev(o);
 }
 
 static struct open_dev *handle_dev(uint32_t handle)
@@ -157,7 +173,8 @@ static uint32_t op_open(uint32_t index, uint32_t *handle)
     e = &devs[index];
     /* a stale handle from a crashed PCLink would otherwise lock us out */
     if ((o = find_open(e->bus, e->addr))) close_dev(o);
-    for (int i = 0; i < MAX_DEVS && !o; i++) if (!opens[i].in_use) o = &opens[i];
+    o = NULL;
+    for (int i = 0; i < MAX_DEVS && !o; i++) if (!opens[i].in_use && !opens[i].busy) o = &opens[i];
     if (!o) return FT_INSUFFICIENT_RESOURCES;
 
     if (!(o->ftdi = ftdi_new())) return FT_INSUFFICIENT_RESOURCES;
@@ -264,9 +281,10 @@ static void *serve(void *arg)
 
         if (req.op == OP_READ || req.op == OP_WRITE)
         {
-            /* don't hold the global lock across blocking I/O */
+            /* don't hold the global lock across blocking I/O; the busy
+             * count keeps a concurrent FT_Close from freeing the device */
             pthread_mutex_lock(&lock);
-            o = handle_dev(req.handle);
+            if ((o = handle_dev(req.handle))) o->busy++;
             pthread_mutex_unlock(&lock);
             if (!o)
                 resp.status = FT_INVALID_HANDLE;
@@ -277,6 +295,12 @@ static void *serve(void *arg)
             }
             else
                 resp.status = op_write(o, buf, req.len, &resp.val0);
+            if (o)
+            {
+                pthread_mutex_lock(&lock);
+                release_dev(o);
+                pthread_mutex_unlock(&lock);
+            }
             dbg("%s h=%x n=%u -> st=%u n=%u\n", req.op == OP_READ ? "READ" : "WRITE", req.handle,
                  req.op == OP_READ ? req.arg0 : req.len, resp.status, req.op == OP_READ ? resp.len : resp.val0);
         }

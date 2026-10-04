@@ -45,6 +45,9 @@ def retarget_lea(at, old, new):   # lea reg, [rip+disp32] (7 bytes)
 retarget_lea(0x140e, SYS_ENTRY, SYS_STUB)    # thunk->syscall_thunk.addr
 retarget_lea(0x1430, UNIX_ENTRY, UNIX_STUB)  # thunk->unix_thunk.addr
 
-struct.pack_into('<I', d, 0x180 + 8, 0xe00)  # .text VirtualSize covers the stubs
+TEXT_HDR = 0x180  # .text section header: Name[8], VirtualSize, VirtualAddress, ...
+assert d[TEXT_HDR:TEXT_HDR + 8] == b'.text\0\0\0', "unexpected section header layout"
+assert struct.unpack_from('<II', d, TEXT_HDR + 8) == (0xd86, TEXT_RVA), "unexpected .text size/address"
+struct.pack_into('<I', d, TEXT_HDR + 8, 0xe00)  # .text VirtualSize covers the stubs
 open(path, 'wb').write(d)
 print("patched", path)
