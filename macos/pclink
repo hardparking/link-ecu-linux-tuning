@@ -1,0 +1,20 @@
+#!/bin/zsh
+# Launch PCLink on macOS: start ftdi-bridge if it isn't running, then run
+# PCLink in a Wine virtual desktop (keeps its windows on-screen).
+#
+#   WINE          patched Wine binary (see MACOS.md, step 2)
+#   WINEPREFIX    prefix PCLink is installed in
+#   PCLINK_DESKTOP virtual desktop size, a bit under your screen's "looks like" size
+here=${0:A:h}
+: ${WINE:="$HOME/Applications/Wine PCLink.app/Contents/Resources/wine/bin/wine"}
+: ${WINEPREFIX:=$HOME/.wine-pclink}
+: ${PCLINK_DESKTOP:=1500x940}
+: ${PCLINK_EXE:='C:\Program Files (x86)\PCLink G5\PCLink.exe'}
+export WINEPREFIX
+
+bridge=$here/ftdi-bridge/ftdi-bridge
+if [[ -x $bridge ]] && ! pgrep -qf "$bridge"; then
+    "$bridge" >>"$HOME/Library/Logs/ftdi-bridge.log" 2>&1 &
+    sleep 0.5
+fi
+exec "$WINE" explorer /desktop=PCLink,$PCLINK_DESKTOP "$PCLINK_EXE" "$@"
