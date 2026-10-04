@@ -17,4 +17,6 @@ if [[ -x $bridge ]] && ! pgrep -qf "$bridge"; then
     "$bridge" >>"$HOME/Library/Logs/ftdi-bridge.log" 2>&1 &
     sleep 0.5
 fi
+glfix=$here/gl-legacy-fix/gl_legacy_fix.dylib
+[[ -f $glfix ]] && export DYLD_INSERT_LIBRARIES=$glfix
 exec "$WINE" explorer /desktop=PCLink,$PCLINK_DESKTOP "$PCLINK_EXE" "$@"

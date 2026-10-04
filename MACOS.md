@@ -12,7 +12,7 @@ built-in FT232H (`0403:7069`, "Link ECU").
 
 ## Why macOS needs more than the Linux steps
 
-Two things that just work on Linux break on a Mac:
+Three things that just work on Linux break on a Mac:
 
 1. **PCLink crashes on startup.** macOS has no 32-bit libraries, so Wine
    runs 32-bit Windows apps in "new WoW64" mode under Rosetta 2: 32-bit code
@@ -29,6 +29,16 @@ Two things that just work on Linux break on a Mac:
    calls over localhost to `ftdi-bridge`, a native arm64 helper that drives
    the device with [libftdi](https://www.intra2net.com/en/developer/libftdi/).
    It doesn't touch Wine internals, so Wine upgrades don't break it.
+3. **PCLink reports "Error initializing OpenGL! invalid enumerant"** when it
+   opens a 3D view. Wine 11.18 queries `GL_MAJOR_VERSION` (a GL 3.0+ enum)
+   on every new context; macOS gives PCLink a legacy 2.1 context, so the
+   query raises `GL_INVALID_ENUM`, which Wine leaves pending for PCLink's
+   first `glGetError()`. The 2.x fallback that follows also fills a
+   shadowed local array, so PCLink sees no GL extensions at all (2 offered
+   instead of 132). Both are fixed in Wine master; until a macOS build has
+   that fix, `macos/gl-legacy-fix` answers the two GL 3 queries on 2.x
+   contexts so Wine takes its working path. It's loaded with
+   `DYLD_INSERT_LIBRARIES` by the launcher.
 
 ## What you need
 
@@ -85,10 +95,12 @@ differs, set `PCLINK_EXE` for the launcher in step 6.
 ```bash
 brew install mingw-w64 libftdi
 make -C macos/ftdi-bridge
+make -C macos/gl-legacy-fix
 ```
 
-This produces `ftd2xx.dll` (32-bit Windows, cross-compiled with mingw) and
-`ftdi-bridge` (native arm64). The Makefile builds the helper against the
+This produces `ftd2xx.dll` (32-bit Windows, cross-compiled with mingw),
+`ftdi-bridge` (native arm64) and `gl_legacy_fix.dylib` (x86_64, since Wine
+runs under Rosetta). The Makefile builds the helper against the
 macOS 26 SDK because the current Command Line Tools linker can't read the
 macOS 27 SDK's library stubs.
 
@@ -174,6 +186,11 @@ while it's running.
 `Exception frame is not in stack limits` after an access violation at
 `wow64cpu+0x1135` or `+0x1239`: the Wine patch isn't applied (or a Wine
 update replaced the DLL). Redo step 2.
+
+**"Error initializing OpenGL! invalid enumerant" / 3D views only partly
+drawn.** `gl_legacy_fix.dylib` isn't loaded: build it (step 4) and launch
+through `macos/pclink`. With `WINEDEBUG=+opengl`, a working setup lists
+dozens of `init_client_context ++ GL_...` extensions rather than two WGL ones.
 
 **PCLink starts but no window appears.** It's off-screen; launch through
 `macos/pclink` (virtual desktop).

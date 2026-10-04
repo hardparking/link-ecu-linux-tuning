@@ -3,3 +3,4 @@
 .DS_Store
 macos/ftdi-bridge/ftd2xx.dll
 macos/ftdi-bridge/ftdi-bridge
+macos/gl-legacy-fix/gl_legacy_fix.dylib
