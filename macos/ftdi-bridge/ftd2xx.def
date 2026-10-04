@@ -1,0 +1,13 @@
+; Ordinals must match FTDI's ftd2xx.dll: PCLink imports these by ordinal.
+LIBRARY ftd2xx.dll
+EXPORTS
+    FT_Open                   = FT_Open@8                    @1
+    FT_Close                  = FT_Close@4                   @2
+    FT_Read                   = FT_Read@16                   @3
+    FT_Write                  = FT_Write@16                  @4
+    FT_SetBaudRate            = FT_SetBaudRate@8             @7
+    FT_SetDataCharacteristics = FT_SetDataCharacteristics@16 @8
+    FT_Purge                  = FT_Purge@8                   @16
+    FT_SetTimeouts            = FT_SetTimeouts@12            @17
+    FT_CreateDeviceInfoList   = FT_CreateDeviceInfoList@4    @70
+    FT_GetDeviceInfoDetail    = FT_GetDeviceInfoDetail@32    @72

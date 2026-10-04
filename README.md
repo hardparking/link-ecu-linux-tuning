@@ -1,5 +1,9 @@
 # Tuning a Link G4X ECU on Linux with PCLink under Wine
 
+> **On a Mac?** See [MACOS.md](MACOS.md) — PCLink on Apple Silicon under
+> patched Wine, with a native USB bridge (experimental: PCLink runs; live
+> ECU connection not yet confirmed).
+
 A working setup for running [Link Engine Management's
 PCLink](https://www.linkecu.com/software-support/pclink/) Windows tuning
 software on Ubuntu Linux, talking to a Link G4X (or other Link USB-cable
