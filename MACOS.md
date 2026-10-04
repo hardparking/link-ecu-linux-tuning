@@ -90,6 +90,19 @@ On macOS the installer defaulted to `C:\Program Files (x86)\PCLink G5\`
 (the Linux guide's install landed in `C:\Link G5\PCLink G5\`). If yours
 differs, set `PCLINK_EXE` for the launcher in step 6.
 
+Then give Wine a stand-in for **Franklin Gothic Medium**, the font PCLink's
+gauges use for their titles and values. It ships with Windows, not macOS;
+without it GDI+ can't create the font and the gauges draw only their
+scales:
+
+```bash
+WINEPREFIX=~/.wine-pclink "$WINE" reg add 'HKCU\Software\Wine\Fonts\Replacements' \
+    /v 'Franklin Gothic Medium' /d 'Arial' /f
+```
+
+(If you have a licensed Windows copy, putting `framd.ttf` in the prefix's
+`drive_c/windows/Fonts` gives you the real typeface instead.)
+
 ### 4. Build the USB bridge
 
 ```bash
@@ -191,6 +204,11 @@ update replaced the DLL). Redo step 2.
 drawn.** `gl_legacy_fix.dylib` isn't loaded: build it (step 4) and launch
 through `macos/pclink`. With `WINEDEBUG=+opengl`, a working setup lists
 dozens of `init_client_context ++ GL_...` extensions rather than two WGL ones.
+
+**Gauges show only their scales — no titles or values.** The Franklin
+Gothic Medium replacement from step 3 is missing. With a relay trace of
+`gdiplus.GdipCreateFontFamilyFromName`, the failing lookup returns `0xe`
+(FontFamilyNotFound) for that name.
 
 **PCLink starts but no window appears.** It's off-screen; launch through
 `macos/pclink` (virtual desktop).
